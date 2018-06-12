@@ -1,0 +1,426 @@
+---
+title: "beagle_quenching_test_20180607"
+author: "Stephen Shivers, Betty, Kreakie, & Bryan Milstead"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(here)
+library(knitr)
+library(viridis)
+
+options(stringsAsFactors = FALSE)
+```
+
+```{r data, include=FALSE, echo = FALSE}
+#read the 2018 calibration data
+raw <- read_xlsx(path = here("data/beagle_dilution_test.xlsx"), 
+              sheet = "20180607long", col_types = c(rep('text', 3), rep('numeric', 2), 'text', rep('numeric', 9), 'text'))
+
+```
+
+
+```{r func_calc_summary, include=FALSE, echo = FALSE}
+#' calc_summary
+#'
+#' This function calculates mean, sd, se, and 95% confidence for a data.frame summarized by grouping variable
+#'
+#' @param df A data.frame to by summariz
+#' @param x the variable to summarize
+#' @param correction logical variable (TRUE / FALSE): correct values by multiplying by the dilution_factor
+#' @param ... Grouping variables separated by commas
+#'
+#' @export
+#' @examples
+#' calc_summary(df = raw, x = pc, trt, dilution_factor, beagle)
+
+calc_summary <- function(df, x = chla, correction = TRUE, ...) {
+  x <- enquo(x)
+  
+  if(correction) {
+  b <- group_by(df, ...) %>%
+    summarize(n = sum(!is.na(!!x)),
+              mean = mean(!! x * dilution_factor, na.rm = TRUE),
+              sd = sd(!! x * dilution_factor, na.rm=TRUE)) %>%
+    mutate(se = sd / sqrt(n), 
+           ci = se * qt(.975/2 + .5, n-1),
+           variable =as.character(x)[2])
+  } else {
+    b <- group_by(df, ...) %>%
+      summarize(n = sum(!is.na(!!x)),
+                mean = mean(!! x, na.rm = TRUE),
+                sd = sd(!! x, na.rm=TRUE)) %>%
+      mutate(se = sd / sqrt(n), 
+             ci = se * qt(.975/2 + .5, n-1),
+             variable =as.character(x)[2])
+  }
+  return(b)
+}
+
+calc_summary(df = raw, x = pc, correction = TRUE, trt, dilution_factor, beagle)
+
+```
+
+```{r func_line_bars, include=FALSE, echo = FALSE}
+#' line_bars
+#'
+#' This function takes the output from the function "calc_summary" and plots means with error bars (se or ci) for the beagle output by beagle.
+#'
+#' @param df A data.frame with the summaries
+#' @param group Grouping variable to use the line colour.  Default == beagle
+#' @param pd amount by which to offset (position_dodge) the x variable so error bars don't overwrite
+#' @param bar choose whether to use the ci (95% confidence interval) or se (2 standard errores) for the error bars
+#' @param title title for the plot
+#'
+#' @export
+#' @examples
+#' df <- calc_summary(df = raw, x = chla, correction = TRUE, trt, dilution_factor) %>% 
+#'   filter(dilution_factor < 130)
+#'   line_bars(df, group = trt, pd = .2, bar = "ci", title = "")
+#' 
+#' df <- calc_summary(df = raw, x = pc, correction = TRUE, trt, dilution_factor, beagle) %>% 
+#'   filter(trt == 'frozen')
+#'   line_bars(df, beagle, .2, "se", "trt == frozen; values corrected for dilution")
+
+line_bars <- function(df, group = beagle, pd = .2, bar = "ci", title = "") {
+  # rename grouping column to "group"
+  group <- enquo(group)
+    df <- df %>%
+      rename(group = !! group)
+
+  #define ylabel based on input
+  if(df$variable[1] == 'pc') y_lab <- paste0("Mean Conc. Phycocyanin (", expression("\U03BC"),"g/l)")
+  if(df$variable[1] == 'chla') y_lab <- paste0("Mean Conc. Chlorophyll (", expression("\U03BC"),"g/l)")
+  if(df$variable[1] == 'rfu1_high') y_lab <- "RFU (Channel 1 High)"
+  if(df$variable[1] == 'rfu1_lo') y_lab <- "RFU (Channel 1 Low)"
+  if(df$variable[1] == 'rfu2_high') y_lab <- "RFU (Channel 2 High)"
+  if(df$variable[1] == 'rfu2_lo') y_lab <- "RFU (Channel 2 Low)"
+  
+  #set error bars and update ylabel
+  if(bar == "ci") {
+    bar_min <- df$mean - df[bar]
+    bar_max <- df$mean + df[bar]
+    y_lab = paste0(y_lab, " ", expression("\261"), " 95% c.i.")
+    
+  } else {
+    bar_min <- df$mean - (2 * df[bar])
+    bar_max <- df$mean + (2 * df[bar])
+    y_lab = paste0(y_lab, " ", expression("\261"), " 2 se")
+  }
+  
+  #set up the position offset (so bars don't overlap)
+  pd <- position_dodge(pd) # offset the points
+  
+  # plot
+  ggplot(df, aes(x = dilution_factor, y = mean, colour = group)) + 
+    geom_line(position=pd, size =1) +
+    geom_point(position=pd, size = 3) + 
+    geom_errorbar(aes(ymin = bar_min, ymax = bar_max), width = .5, position=pd, size = 1) +
+    scale_x_continuous(trans='log2', name = 'Dilution Factor') +
+    scale_y_continuous(name = y_lab) +
+    ggtitle(title) + 
+    labs(colour = group)
+}
+```
+
+## Introduction
+
+There is concern that the beagle fluorometers are not reading chlorophyll and phycocyanin values correctly at high concentrations.  This may be caused by physical interference (quenching) at high concentrations.  If this is the case measured concentrations should increase if the samples are diluted.  To test this we conducted a series of measurements on a lab culture of *Microcystis*.  To look at quenching we compared values for undiluted samples to those from a dilution series.  We were also interested in testing whether dark adaptation and freezing affected the results.  
+
+## Methods
+
+* A single laboratory culture of *Microcystis* was used for all tests. On the first day of the study we measured concentrations of microcystin and chlorophyll with the beagles on the fresh, unprocessed samples following the CMC standard procedure. Triplicate measurements were made on each of two beagles.  To check for quenching samples were measured undiluted, and 10x (1:9), 100x (1:99) and 1000x (1:999) dilutions.  
+
+* Triplicate 10 ml samples were placed in the dark overnight to check for dark adaption.  Phycocyanin and chlorophyll were measured for these samples the following day.  As with the fresh samples the dark adapted samples were measured undiluted, and 10x (1:9), 100x (1:99) and 1000x (1:999) dilutions on two beagles.
+
+* Six 10 ml samples (2 beagles x 3 reps) were frozen overnight and then measured the following day following a stepped 50% dilution series that ranged from 2x - 1024x dilutions (see below).
+
+* Fresh samples were also processed for chlorophyll and phycocyanin extaction with measurement of concentration using a Turner benchtop fluorometer.
+
+* *Microcystis* cells counts were done with a hemocytometer at 100x magnification.  A total of 3 4x4 grids were counted by two observers (Stephen and Bryan).
+
+### steps
+
+1. Prep for extracted chla and pc (10 ml x 2 extractions x 3 reps):  for each culture place 10 ml in each of three scintillation vials and store in darkness overnight. Sum = 60 ml.
+2. Unfrozen, non-dark adapted samples of each culture (10 ml x 3 reps x 2 beagles). Sum = 60 ml. For each rep: 
+    + Read RFU, Chla, and PC (4 + 4 ml) on beagles
+    + Dilute 1:9 (1 ml undiluted sample + 9 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:99 (1 ml 1:9 dilution + 9 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:999 (1 ml 1:99 dilution + 9 ml di water) and Read RFU, Chla, and PC
+3. Unfrozen, dark adapted samples of each culture (10 ml x 3 reps x 2 beagles): for each culture place 20 ml in each of three scintillation vials and store in darkness overnight. Sum = 60 ml.  For each rep:
+    + Read RFU, Chla, and PC (4 + 4 ml) on beagles
+    + Dilute 1:9 (1 ml undiluted sample + 9 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:99 (1 ml 1:9 dilution + 9 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:999 (1 ml 1:99 dilution + 9 ml di water) and Read RFU, Chla, and PC
+4. Frozen samples (10 ml x 3 reps x 2 beagles): For each culture place 10 ml in each of six scintillation vials and freeze overnight. Sum = 60 ml.  Thaw each vial and:
+    + Read RFU, Chla, and PC (4 ml) on beagles
+    + Dilute 1:1 (5 ml undiluted sample + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:3 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:7 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:15 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:31 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:63 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:127 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:255 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:511 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+    + Dilute 1:1023 (5 ml previous dilution + 5 ml di water) and Read RFU, Chla, and PC
+
+### Materials
+
+* Laboratory culture of *Microcystis*
+* Two beagles
+* Sample: 240 ml of each sample
+* 1, 5, and 10 ml pipettors and tips
+* scintillation vials 
+* cuvettes
+* scintillation vials
+* di water for dilutions
+
+## Results
+
+### Cells Counts
+
+* The same samples were counted by Stephen and Bryan with different results.  Bryan's eyesight is not what it used to be so perhaps better to go with Stephen's counts.
+* To convert these to cells / ml multiply by 10k.
+* The cell count is between 6-7 million cells / ml
+* Fairly dense culture
+
+```{r cells, include=FALSE, echo = FALSE}
+cells <- data.frame(rep = rep(1:3, 2), who = c(rep('stephen', 3), rep('bryan', 3)), counts = c(716, 728, 731, 632, 617, 635)) 
+cells$cells_ml <- cells$counts * 10000
+
+cells
+
+
+spread(cells[-4], who, counts)
+spread(cells[-3], who, cells_ml)
+
+
+cell_summary <- group_by(cells, who) %>%
+      summarize(n = sum(!is.na(counts)),
+                mean = mean(counts, na.rm = TRUE),
+                sd = sd(counts, na.rm = TRUE),
+                min = min(counts, na.rm = TRUE),
+                max = max(counts, na.rm = TRUE)) 
+```
+
+```{r cells1, include=TRUE, echo = FALSE}
+
+kable(cell_summary)
+```
+
+### Extractions
+
+* A summary of the extraction results is presented below
+* Values for both are consistent and high
+
+```{r extraction, include=FALSE, echo = FALSE}
+#read the 2018 calibration data
+extract <- read.csv(file = here("data/extractions20180608.csv"))
+                    
+# data is 6/6/2018
+extract$date <-20180606 
+
+extract_summary <- select(extract, date, reps, variable, value, concentration) %>% 
+  mutate(concentration = round(concentration, 2),
+         variable = ifelse(variable == 'chla_rfu', 'chlorophyll', variable),
+         variable = ifelse(variable == 'phyco', 'phycocyanin', variable)) %>%
+  filter(concentration > 100) %>%
+  group_by(variable) %>%
+      summarize(n = sum(!is.na(concentration)),
+                mean = mean(concentration, na.rm = TRUE),
+                sd = sd(concentration, na.rm = TRUE),
+                min = min(concentration, na.rm = TRUE),
+                max = max(concentration, na.rm = TRUE)) 
+```
+
+```{r extraction1, include=TRUE, echo = FALSE}
+
+kable(extract_summary)
+```
+
+### quenching
+
+* Since we have a high concentration of Phycocyanin and Chlorophyll a as well as high cell counts we should expect that undiluted samples will show quenching or interference so the the values should increase with dilution.
+
+* The data are plotted two ways.
+    + First we plot the raw data against the dilution factor (log2 scale) 
+    + Then the raw data are corrected for dilution by multiplying by the dilution factor and reploted.
+    + Presented are the data for the frozen samples for all six Beagle outputs (Chla, PC, RFU1_high, RFU1_lo, RFU2_high, and RFU2_lo)
+    
+```{r plots1, include=TRUE, echo = FALSE}
+# pc
+
+df <- calc_summary(df = raw, x = pc, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+qq <- line_bars(df, beagle, .2, "se", "Var == pc; trt == frozen; values NOT corrected for dilution; hline = extraction")
+    qq + geom_hline(aes(yintercept = extract_summary$mean[2]), size = 1.5, color = 'orange')
+
+df <- calc_summary(df = raw, x = pc, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+qq <- line_bars(df, beagle, .2, "se", "Var == pc; trt == frozen; values corrected for dilution; hline = extraction")
+    qq + geom_hline(aes(yintercept = extract_summary$mean[2]), size = 1.5, color = 'orange')
+
+# chla
+
+df <- calc_summary(df = raw, x = chla, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+qq <- line_bars(df, beagle, .2, "se", "Var == chla; trt == frozen; values NOT corrected for dilution")
+  qq + annotate(geom="text", x=10.5, y=11, 
+                  label = paste0("Leaping Lizards, extracted Chla = ", extract_summary$mean[1], " ", expression("\U03BC"),"g/l)"),
+                  color="red")
+
+df <- calc_summary(df = raw, x = chla, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen', mean < 50) 
+qq <-line_bars(df, beagle, .2, "se", "Var == chla; trt == frozen; values corrected for dilution; one outlier removed")
+  qq + annotate(geom="text", x=8.5, y=3.5, 
+                  label = paste0("OMG, extracted Chla = ", extract_summary$mean[1], " ", expression("\U03BC"),"g/l)"),
+                  color="red")
+
+# rfu1_high
+
+df <- calc_summary(df = raw, x = rfu1_high, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu1_high; trt == frozen; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu1_high, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu1_high; trt == frozen; values corrected for dilution")
+
+# rfu1_lo
+
+df <- calc_summary(df = raw, x = rfu1_lo, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu1_lo; trt == frozen; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu1_lo, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu1_lo; trt == frozen; values corrected for dilution")
+
+# rfu2_high
+
+df <- calc_summary(df = raw, x = rfu2_high, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu2_high; trt == frozen; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu2_high, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu2_high; trt == frozen; values corrected for dilution")
+
+# rfu2_lo
+
+df <- calc_summary(df = raw, x = rfu2_lo, correction = FALSE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu2_lo; trt == frozen; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu2_lo, correction = TRUE, trt, dilution_factor, beagle) %>% 
+      filter(trt == 'frozen')
+line_bars(df, beagle, .2, "se", "Var == rfu2_lo; trt == frozen; values corrected for dilution")
+```    
+
+
+
+### Fresh vs. Frozen vs Dark Adapted
+
+```{r plots2, include=TRUE, echo = FALSE}
+
+# pc
+df <- calc_summary(df = raw, x = pc, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+qq <- line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == pc; values NOT corrected for dilution; hline = extraction")
+  qq + geom_hline(aes(yintercept = extract_summary$mean[2]), size = 1.5, color = 'orange')
+  
+df <- calc_summary(df = raw, x = pc, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+qq <- line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == pc; values corrected for dilution; hline = extraction")
+  qq + geom_hline(aes(yintercept = extract_summary$mean[2]), size = 1.5, color = 'orange')
+
+# chla
+df <- calc_summary(df = raw, x = chla, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+qq <- line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == chla; values NOT corrected for dilution")
+    qq + annotate(geom="text", x=5, y=14, 
+                  label = paste0("Whoa Nelly, extracted Chla = ", extract_summary$mean[1], " ", expression("\U03BC"),"g/l)"),
+                  color="red")
+
+df <- calc_summary(df = raw, x = chla, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+qq <- line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == chla; values corrected for dilution")
+  qq + annotate(geom="text", x=5, y=23, 
+                  label = paste0("Holy Smokes, extracted Chla = ", extract_summary$mean[1], " ", expression("\U03BC"),"g/l)"),
+                  color="red")
+
+# rfu1_high
+df <- calc_summary(df = raw, x = rfu1_high, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu1_high; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu1_high, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu1_high; values corrected for dilution")
+
+# rfu1_lo
+df <- calc_summary(df = raw, x = rfu1_lo, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu1_lo; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu1_lo, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu1_lo; values corrected for dilution")
+
+# rfu2_high
+df <- calc_summary(df = raw, x = rfu2_high, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu2_high; values NOT corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu2_high, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu2_high; values corrected for dilution")
+
+# rfu2_lo
+df <- calc_summary(df = raw, x = rfu2_lo, correction = FALSE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu2_lo; values corrected for dilution")
+
+df <- calc_summary(df = raw, x = rfu2_lo, correction = TRUE, trt, dilution_factor) %>% 
+  filter(dilution_factor < 130)
+line_bars(df, group = trt, pd = .2, bar = "ci", title = "Var == rfu2_lo; values NOT corrected for dilution")
+```
+
+### compare pc and chla to rfu
+
+```{r plots2, include=TRUE, echo = FALSE}
+pd <- position_dodge(.2)
+
+ggplot(raw, aes(y = pc * dilution_factor, x = rfu2_high, colour = trt)) + 
+   geom_point(position=pd, size = 3) 
+
+raw_c <- raw[-107, ]
+raw_c <- filter(raw_c, rfu1_high > 100)
+
+ggplot(raw_c, aes(x = chla * dilution_factor, y = rfu1_high, colour = trt)) + 
+   geom_point(position=pd, size = 3) 
+
+
+
++ 
+  
+  geom_line(position=pd, size =1) +
+    geom_errorbar(aes(ymin = bar_min, ymax = bar_max), width = .5, position=pd, size = 1) +
+    scale_x_continuous(trans='log2', name = 'Dilution Factor') +
+    scale_y_continuous(name = y_lab) +
+    ggtitle(title) + 
+    labs(colour = group)
+
+
+
+
+
+```
+
+
+
